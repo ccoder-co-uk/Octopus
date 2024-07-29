@@ -1,0 +1,13 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/Octopus/v17
+/.vs
+/src/.vs/Octopus
+/src/HomeAssistant.Data/obj
+/src/Importer/obj
+/src/Octopus/.vs
+/src/Octopus/obj
+*.user
+/src/Octopus.Data/obj

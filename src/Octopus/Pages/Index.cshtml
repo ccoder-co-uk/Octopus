@@ -1,0 +1,297 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Octopus Data</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0/dist/chartjs-adapter-moment.min.js"></script>
+
+    <style>
+        .top-margin { margin-top: 20%; }
+    </style>
+</head>
+<body>
+    <div class="container" style="max-width: 90%;">
+        <h1 class="mt-5">Octopus Data</h1>
+        <div id="controls" class="mt-3">
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="octopusUnits" checked>
+                <label class="form-check-label" for="octopusUnits">Octopus Units</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="haUnits">
+                <label class="form-check-label" for="haUnits">HA Units</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="octopusCost" checked>
+                <label class="form-check-label" for="octopusCost">Octopus Cost</label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="checkbox" id="haCost">
+                <label class="form-check-label" for="haCost">HA Cost</label>
+            </div>
+            <div class="form-group mt-3">
+                <label for="startDate">Start Date:</label>
+                <input type="date" id="startDate" class="form-control" style="display: inline-block; width: auto;">
+                <label for="endDate">End Date:</label>
+                <input type="date" id="endDate" class="form-control" style="display: inline-block; width: auto;">
+            </div>
+            <button id="applyDateRange" class="btn btn-primary mt-2">Apply Date Range</button>
+        </div>
+        <div id="chart-container" class="mt-4"></div>
+    </div>
+
+    <script>
+        let charts = [];
+        let dailyData = [];
+
+        async function init() {
+            dailyData = await apiGet("Api/Data");
+            const dateRange = getDateRange(dailyData);
+            document.getElementById('startDate').value = dateRange.min;
+            document.getElementById('endDate').value = dateRange.max;
+            renderCharts(dailyData, dateRange.min, dateRange.max);
+            setupEventListeners();
+        }
+
+        async function apiGet(path) {
+            return await fetch(path, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            }).then(response => response.json());
+        }
+
+        function renderCharts(data, startDate, endDate) {
+            const filteredData = data.filter(item => {
+                const itemDate = new Date(item.date);
+                return itemDate >= new Date(startDate) && itemDate <= new Date(endDate);
+            });
+            const groupedData = groupDataByMeterPointReference(filteredData);
+            const chartContainer = document.getElementById('chart-container');
+            chartContainer.innerHTML = '';
+            let totalOctopusUnits = 0;
+            let totalHAUnits = 0;
+            let totalOctopusCost = 0;
+            let totalHACost = 0;
+
+            Object.keys(groupedData).forEach(meterPointReference => {
+                const meterData = groupedData[meterPointReference];
+
+                const allHAUnitsZero = meterData.HAUnits.every(unit => unit === 0);
+                const allOctopusUnitsZero = meterData.OctopusUnits.every(unit => unit === 0);
+
+                if (allHAUnitsZero && allOctopusUnitsZero) {
+                    return;
+                }
+
+                const chartRow = document.createElement('div');
+                chartRow.classList.add('row', 'mb-4');
+
+                const chartCol = document.createElement('div');
+                chartCol.classList.add('col-md-8');
+
+                const statsCol = document.createElement('div');
+                statsCol.classList.add('col-md-4');
+
+                const chartCanvas = document.createElement('canvas');
+                chartCanvas.id = `chart-${meterPointReference}`;
+                chartCol.append("MPAN: " + meterPointReference.split('_')[0] + ", Serial Number: " + meterPointReference.split('_')[1]);
+                chartCol.appendChild(chartCanvas);
+
+                const billDetails = document.createElement('div');
+                billDetails.classList.add('top-margin');
+
+                const totalMeterOctopusUnits = meterData.OctopusUnits.reduce((a, b) => a + b, 0);
+                const totalMeterHAUnits = meterData.HAUnits.reduce((a, b) => a + b, 0);
+                const totalMeterOctopusCost = meterData.OctopusTotalCost.reduce((a, b) => a + b, 0);
+                const totalMeterHACost = meterData.HSTotalCost.reduce((a, b) => a + b, 0);
+
+
+                totalOctopusUnits += totalMeterOctopusUnits;
+                totalHAUnits += totalMeterHAUnits;
+                totalOctopusCost += totalMeterOctopusCost;
+                totalHACost += totalMeterHACost;
+
+                billDetails.innerHTML = `
+                    <p>Total Octopus Units: ${totalMeterOctopusUnits.toFixed(2)}</p>
+                    <p>Total HA Units: ${totalMeterHAUnits.toFixed(2)}</p>
+                    <p>Total Octopus Cost: £${totalMeterOctopusCost.toFixed(2)}</p>
+                    <p>Total HA Cost: £${totalMeterHACost.toFixed(2)}</p>
+                `;
+
+                statsCol.appendChild(billDetails);
+                chartRow.appendChild(chartCol);
+                chartRow.appendChild(statsCol);
+                chartContainer.appendChild(chartRow);
+
+                const ctx = chartCanvas.getContext('2d');
+                charts.push(createChart(meterPointReference, meterData, ctx));
+            });
+        }
+
+        function createChart(meterPointReference, meterData, ctx) {
+            var options = [
+                document.getElementById("octopusUnits").checked,
+                document.getElementById("haUnits").checked,
+                document.getElementById("octopusCost").checked,
+                document.getElementById("haCost").checked
+            ];
+
+            var data = {
+                labels: meterData.dates,
+                datasets: []
+            };
+
+            if(options[0]){
+                data.datasets.push({
+                    label: 'Octopus Units',
+                    data: meterData.OctopusUnits.map((value, index) => ({ x: meterData.dates[index], y: value })),
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    fill: false
+                });
+            }
+
+             if(options[1]){
+                data.datasets.push({
+                    label: 'HA Units',
+                    data: meterData.HAUnits.map((value, index) => ({ x: meterData.dates[index], y: value })),
+                    borderColor: 'rgba(54, 162, 235, 1)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                    fill: false
+                });
+             }
+
+            if(options[2]){
+                data.datasets.push({
+                    label: 'Octopus Cost',
+                    data: meterData.OctopusTotalCost.map((value, index) => ({ x: meterData.dates[index], y: value })),
+                    borderColor: 'rgba(255, 206, 86, 1)',
+                    backgroundColor: 'rgba(255, 206, 86, 0.2)',
+                    fill: false
+                });
+            }
+
+            if(options[3]){
+                data.datasets.push({
+                    label: 'HA Cost',
+                    data: meterData.HSTotalCost.map((value, index) => ({ x: meterData.dates[index], y: value })),
+                    borderColor: 'rgba(153, 102, 255, 1)',
+                    backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                    fill: false
+                });
+            }
+
+
+            return new Chart(ctx, {
+                type: 'line',
+                data: data,
+                options: {
+                    responsive: true,
+                    title: {
+                        display: true,
+                        text: `Meter Reference: ${meterPointReference}`
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                tooltipFormat: 'll'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Value'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        function setupEventListeners() {
+            const checkboxes = document.querySelectorAll('#controls input[type="checkbox"]');
+            checkboxes.forEach(checkbox => {
+                checkbox.addEventListener('change', updateChartVisibility);
+            });
+
+            document.getElementById('applyDateRange').addEventListener('click', () => {
+                const startDate = document.getElementById('startDate').value;
+                const endDate = document.getElementById('endDate').value;
+                renderCharts(dailyData, startDate, endDate);
+            });
+        }
+
+        function updateChartVisibility() {
+            const visibilitySettings = {
+                octopusUnits: document.getElementById('octopusUnits').checked,
+                haUnits: document.getElementById('haUnits').checked,
+                octopusCost: document.getElementById('octopusCost').checked,
+                haCost: document.getElementById('haCost').checked
+            };
+
+            charts.forEach(chart => {
+                chart.data.datasets[0].hidden = !visibilitySettings.octopusUnits;
+                chart.data.datasets[1].hidden = !visibilitySettings.haUnits;
+                chart.data.datasets[2].hidden = !visibilitySettings.octopusCost;
+                chart.data.datasets[3].hidden = !visibilitySettings.haCost;
+                chart.update();
+            });
+        }
+
+        function groupDataByMeterPointReference(data) {
+            const groupedData = {};
+
+            data.forEach(item => {
+                if (!groupedData[item.meterPointReference]) {
+                    groupedData[item.meterPointReference] = {
+                        dates: [],
+                        OctopusUnits: [],
+                        HAUnits: [],
+                        OctopusTotalCost: [],
+                        HSTotalCost: []
+                    };
+                }
+
+                groupedData[item.meterPointReference].dates.push(new Date(item.date));
+                groupedData[item.meterPointReference].OctopusUnits.push(item.octopusUnits);
+                groupedData[item.meterPointReference].HAUnits.push(item.haUnitValue);
+                groupedData[item.meterPointReference].OctopusTotalCost.push(item.octopusTotalCost);
+                groupedData[item.meterPointReference].HSTotalCost.push(item.haTotalCost);
+            });
+
+            Object.keys(groupedData).forEach(meterPointReference => {
+                const sortedIndices = groupedData[meterPointReference].dates
+                    .map((date, index) => ({ date, index }))
+                    .sort((a, b) => a.date - b.date)
+                    .map(item => item.index);
+
+                ['dates', 'OctopusUnits', 'HAUnits', 'OctopusTotalCost', 'HSTotalCost'].forEach(key => {
+                    groupedData[meterPointReference][key] = sortedIndices.map(i => groupedData[meterPointReference][key][i]);
+                });
+            });
+
+            return groupedData;
+        }
+
+        function getDateRange(data) {
+            const dates = data.map(item => new Date(item.date));
+            const minDate = new Date(Math.min(...dates)).toISOString().split('T')[0];
+            const maxDate = new Date(Math.max(...dates)).toISOString().split('T')[0];
+            return { min: minDate, max: maxDate };
+        }
+
+        init();
+    </script>
+</body>
+</html>
